@@ -2,7 +2,7 @@ const Video = require('../models/Video');
 const ProcessingService = require('../services/processingService');
 const fs = require('fs');
 const path = require('path');
-const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3');
+const { S3Client, GetObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const { Upload } = require('@aws-sdk/lib-storage');
 
 const s3 = new S3Client({
@@ -289,19 +289,41 @@ const deleteVideo = async (req, res) => {
         const video = await Video.findById(req.params.id);
         if (!video) return res.status(404).json({ message: 'Video not found' });
 
+        // Authorization Check: Admin or Owner (must be Editor/Admin as per route)
         if (req.user.role !== 'admin' && video.uploader.toString() !== req.user._id.toString()) {
-            return res.status(401).json({ message: 'Not authorized' });
+            return res.status(403).json({ message: 'Not authorized to delete this video' });
         }
 
-        if (fs.existsSync(video.filepath)) {
-            fs.unlinkSync(video.filepath);
+        // 1. Delete from S3 if s3Key exists
+        if (video.s3Key) {
+            try {
+                const deleteCommand = new DeleteObjectCommand({
+                    Bucket: process.env.AWS_BUCKET,
+                    Key: video.s3Key
+                });
+                await s3.send(deleteCommand);
+            } catch (s3Err) {
+                console.error("S3 Deletion Error:", s3Err);
+                // We'll continue to delete from DB even if S3 fails, 
+                // but in a production app we might want to handle this differently.
+            }
         }
 
+        // 2. Delete local file if it exists (for legacy/local uploads)
+        if (video.filepath && fs.existsSync(video.filepath)) {
+            try {
+                fs.unlinkSync(video.filepath);
+            } catch (fsErr) {
+                console.error("Local File Deletion Error:", fsErr);
+            }
+        }
+
+        // 3. Delete from Database
         await video.deleteOne();
         res.json({ message: 'Video removed' });
 
     } catch (err) {
-        console.error(err);
+        console.error("Delete Video Error:", err);
         res.status(500).json({ message: 'Server Error' });
     }
 }
