@@ -45,9 +45,6 @@ const uploadVideo = async (req, res) => {
 
         const s3Result = await upload.done();
 
-        // Delete local file
-        fs.unlinkSync(req.file.path);
-
         const video = await Video.create({
             title: title || req.file.originalname,
             description,
@@ -60,9 +57,9 @@ const uploadVideo = async (req, res) => {
             size: req.file.size
         });
 
-        // Start processing asynchronously
+        // Start processing asynchronously - processing service will now handle cleanup
         const processingService = new ProcessingService(req.app.get('io'));
-        processingService.processVideo(video._id);
+        processingService.processVideo(video._id, req.file.path);
 
         res.status(201).json(video);
     } catch (error) {
@@ -253,7 +250,7 @@ const streamVideo = async (req, res) => {
 
             if (start >= fileSize) {
                 res.status(416).send('Requested range not satisfiable\n' + start + ' >= ' + fileSize);
-                return;
+                return;``
             }
 
             const chunksize = (end - start) + 1;
